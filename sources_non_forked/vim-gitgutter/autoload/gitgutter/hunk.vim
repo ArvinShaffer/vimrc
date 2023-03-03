@@ -328,6 +328,9 @@ function! s:undo(hunk_diff)
     call append(lnum-1, lines[0:hunk[1]])
     execute (lnum+hunk[1]) .','. (lnum+hunk[1]+hunk[3]) .'d _'
   endif
+
+  " Refresh gitgutter's view of buffer.
+  call gitgutter#process_buffer(bufnr(''), 1)
 endfunction
 
 
@@ -565,7 +568,7 @@ endfunction
 function! s:screen_lines(lines)
   let [_virtualedit, &virtualedit]=[&virtualedit, 'all']
   let cursor = getcurpos()
-  normal! g$
+  normal! 0g$
   let available_width = virtcol('.')
   call setpos('.', cursor)
   let &virtualedit=_virtualedit

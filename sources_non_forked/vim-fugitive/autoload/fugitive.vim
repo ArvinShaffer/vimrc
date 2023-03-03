@@ -142,14 +142,22 @@ function! s:Mods(mods, ...) abort
   let mods = substitute(a:mods, '\C<mods>', '', '')
   let mods = mods =~# '\S$' ? mods . ' ' : mods
   if a:0 && mods !~# '\<\%(aboveleft\|belowright\|leftabove\|rightbelow\|topleft\|botright\|tab\)\>'
-    if a:1 ==# 'Edge'
+    let default = a:1
+    if default ==# 'SpanOrigin'
+      if s:OriginBufnr() > 0 && (mods =~# '\<vertical\>' ? &winfixheight : &winfixwidth)
+        let default = 'Edge'
+      else
+        let default = ''
+      endif
+    endif
+    if default ==# 'Edge'
       if mods =~# '\<vertical\>' ? &splitright : &splitbelow
         let mods = 'botright ' . mods
       else
         let mods = 'topleft ' . mods
       endif
     else
-      let mods = a:1 . ' ' . mods
+      let mods = default . ' ' . mods
     endif
   endif
   return substitute(mods, '\s\+', ' ', 'g')
@@ -157,7 +165,7 @@ endfunction
 
 if exists('+shellslash')
 
-  let s:dir_commit_file = '\c^fugitive://\%(/[^/]\@=\)\=\(.\{-1,\}\)//\%(\(\x\{40,\}\|[0-3]\)\(/.*\)\=\)\=$'
+  let s:dir_commit_file = '\c^fugitive://\%(/[^/]\@=\)\=\([^?#]\{-1,\}\)//\%(\(\x\{40,\}\|[0-3]\)\(/[^?#]*\)\=\)\=$'
 
   function! s:Slash(path) abort
     return tr(a:path, '\', '/')
@@ -169,7 +177,7 @@ if exists('+shellslash')
 
 else
 
-  let s:dir_commit_file = '\c^fugitive://\(.\{-\}\)//\%(\(\x\{40,\}\|[0-3]\)\(/.*\)\=\)\=$'
+  let s:dir_commit_file = '\c^fugitive://\([^?#]\{-\}\)//\%(\(\x\{40,\}\|[0-3]\)\(/[^?#]*\)\=\)\=$'
 
   function! s:Slash(path) abort
     return a:path
@@ -275,8 +283,9 @@ endfunction
 
 function! s:Map(mode, lhs, rhs, ...) abort
   let maps = []
-  let defer = a:0 && a:1 =~# '<unique>' || get(g:, 'fugitive_defer_to_existing_maps')
-  let flags = substitute(a:0 ? a:1 : '', '<unique>', '', '') . (a:rhs =~# '<Plug>' ? '' : '<script>') . '<nowait>'
+  let flags = a:0 && type(a:1) == type('') ? a:1 : ''
+  let defer = flags =~# '<unique>'
+  let flags = substitute(flags, '<unique>', '', '') . (a:rhs =~# '<Plug>' ? '' : '<script>') . '<nowait>'
   for mode in split(a:mode, '\zs')
     if a:0 <= 1
       call add(maps, mode.'map <buffer>' . substitute(flags, '<unique>', '', '') . ' <Plug>fugitive:' . a:lhs . ' ' . a:rhs)
@@ -3293,6 +3302,11 @@ function! s:TempDelete(file) abort
   return ''
 endfunction
 
+function! s:OriginBufnr(...) abort
+  let state = s:TempState(a:0 ? a:1 : bufnr(''))
+  return get(state, 'origin_bufnr', -1)
+endfunction
+
 augroup fugitive_temp
   autocmd!
   autocmd BufReadPre  * exe s:TempReadPre( +expand('<abuf>'))
@@ -3345,7 +3359,8 @@ function! s:RunEdit(state, tmp, job) abort
       let noequalalways = 1
       setglobal equalalways
     endif
-    exe substitute(a:state.mods, '\<tab\>', '-tab', 'g') 'keepalt split' s:fnameescape(file)
+    let mods = s:Mods(a:state.mods, 'SpanOrigin')
+    exe substitute(mods, '\<tab\>', '-tab', 'g') 'keepalt split' s:fnameescape(file)
   finally
     if exists('l:noequalalways')
       setglobal noequalalways
@@ -3802,13 +3817,13 @@ function! fugitive#Command(line1, line2, range, bang, mods, arg, ...) abort
     let stream = exists('*setbufline')
     let do_edit = substitute(s:Mods(a:mods, 'Edge'), '\<tab\>', '-tab', 'g') . 'pedit!'
   elseif pager
-    let allow_pty = 0
+    let allow_pty = get(args, 0, '') is# 'shortlog'
     if pager is# 2 && a:bang && a:line2 >= 0
       let [do_edit, after_edit] = s:ReadPrepare(a:line1, a:line2, a:range, a:mods)
     elseif pager is# 2 && a:bang
-      let do_edit = s:Mods(a:mods) . 'pedit'
+      let do_edit = s:Mods(a:mods, 'SpanOrigin') . 'pedit'
     elseif !curwin
-      let do_edit = s:Mods(a:mods) . 'split'
+      let do_edit = s:Mods(a:mods, 'SpanOrigin') . 'split'
     else
       let do_edit = s:Mods(a:mods) . 'edit'
       call s:BlurStatus()
@@ -4214,7 +4229,9 @@ function! s:DoAutocmdChanged(dir) abort
   finally
     unlet! g:fugitive_event g:fugitive_result
     " Force statusline reload with the buffer's Git dir
-    let &l:ro = &l:ro
+    if dir isnot# FugitiveGitDir()
+      let &l:ro = &l:ro
+    endif
   endtry
   return ''
 endfunction
@@ -6131,15 +6148,15 @@ function! fugitive#Open(cmd, bang, mods, arg, ...) abort
     return 'echoerr ' . string(':G' . a:cmd . '! for temp buffer output has been replaced by :' . get(s:bang_edits, a:cmd, 'Git') . ' --paginate')
   endif
 
-  let mods = s:Mods(a:mods)
-  if a:cmd ==# 'edit'
-    call s:BlurStatus()
-  endif
   try
     let [file, pre] = s:OpenParse(a:arg, 1, 0)
   catch /^fugitive:/
     return 'echoerr ' . string(v:exception)
   endtry
+  let mods = s:Mods(a:mods)
+  if a:cmd ==# 'edit'
+    call s:BlurStatus()
+  endif
   return mods . a:cmd . pre . ' ' . s:fnameescape(file)
 endfunction
 
@@ -6765,8 +6782,12 @@ function! s:BlameCommitFileLnum(...) abort
 endfunction
 
 function! s:BlameLeave() abort
-  let bufwinnr = bufwinnr(s:BlameBufnr())
-  if bufwinnr > 0
+  let state = s:TempState()
+  let bufwinnr = win_id2win(get(state, 'origin_winid'))
+  if bufwinnr == 0
+    let bufwinnr = bufwinnr(get(state, 'origin_bufnr', -1))
+  endif
+  if get(state, 'filetype', '') ==# 'fugitiveblame' && bufwinnr > 0
     let bufnr = bufnr('')
     exe bufwinnr . 'wincmd w'
     return bufnr . 'bdelete'
@@ -6959,8 +6980,10 @@ function! s:BlameSubcommand(line1, count, range, bang, mods, options) abort
         if a:mods =~# '\<tab\>'
           silent tabedit %
         endif
-        let bufnr = bufnr('')
-        let temp_state.origin_bufnr = bufnr
+        let temp_state.origin_bufnr = bufnr('')
+        if exists('*win_getid')
+          let temp_state.origin_winid = win_getid()
+        endif
         let restore = []
         let mods = substitute(a:mods, '\<tab\>', '', 'g')
         for winnr in range(winnr('$'),1,-1)
@@ -6973,11 +6996,11 @@ function! s:BlameSubcommand(line1, count, range, bang, mods, options) abort
             endif
           endif
           let win_blame_bufnr = s:BlameBufnr(winbufnr(winnr))
-          if getwinvar(winnr, '&scrollbind') ? win_blame_bufnr == bufnr : win_blame_bufnr > 0
+          if getwinvar(winnr, '&scrollbind') ? win_blame_bufnr == temp_state.origin_bufnr : win_blame_bufnr > 0
             execute winbufnr(winnr).'bdelete'
           endif
         endfor
-        let restore_winnr = exists('*win_getid') ? win_getid() : 'bufwinnr(' . bufnr . ')'
+        let restore_winnr = get(temp_state, 'origin_winid', 'bufwinnr(' . temp_state.origin_bufnr . ')')
         if !&l:scrollbind
           call add(restore, 'call setwinvar(' . restore_winnr . ',"&scrollbind",0)')
         endif
@@ -7156,6 +7179,9 @@ function! fugitive#BlameSyntax() abort
     return
   endif
   let seen = {}
+  for x in split('01234567890abcdef', '\zs')
+    exe 'syn match FugitiveblameHashGroup'.x '"\%(^\^\=[*?]*\)\@<='.x.'\x\{5,\}\>" nextgroup=FugitiveblameAnnotation,FugitiveblameOriginalLineNumber,fugitiveblameOriginalFile skipwhite'
+  endfor
   for lnum in range(1, line('$'))
     let orig_hash = matchstr(getline(lnum), '^\^\=[*?]*\zs\x\{6\}')
     let hash = orig_hash
@@ -7177,8 +7203,8 @@ function! fugitive#BlameSyntax() abort
     else
       let s:hash_colors[hash] = ''
     endif
-    let pattern = substitute(orig_hash, '^\(\x\)\x\(\x\)\x\(\x\)\x$', '\1\\x\2\\x\3\\x', '') . '*\>'
-    exe 'syn match FugitiveblameHash'.hash.'       "\%(^\^\=[*?]*\)\@<='.pattern.'" nextgroup=FugitiveblameAnnotation,FugitiveblameOriginalLineNumber,fugitiveblameOriginalFile skipwhite'
+    let pattern = substitute(orig_hash, '^\(\x\)\x\(\x\)\x\(\x\)\x$', '\1\\x\2\\x\3\\x', '') . '*'
+    exe 'syn match FugitiveblameHash'.hash.'       "\%(^\^\=[*?]*\)\@<='.pattern.'" contained containedin=FugitiveblameHashGroup' . orig_hash[0]
   endfor
   syn match FugitiveblameUncommitted "\%(^\^\=[?*]*\)\@<=\<0\{7,\}\>" nextgroup=FugitiveblameAnnotation,FugitiveblameScoreDebug,FugitiveblameOriginalLineNumber,FugitiveblameOriginalFile skipwhite
   call s:BlameRehighlight()
@@ -7196,6 +7222,7 @@ endfunction
 
 function! s:BlameMaps(is_ftplugin) abort
   let ft = a:is_ftplugin
+  call s:MapGitOps(ft)
   call s:Map('n', '<F1>', ':help :Git_blame<CR>', '<silent>', ft)
   call s:Map('n', 'g?',   ':help :Git_blame<CR>', '<silent>', ft)
   call s:Map('n', 'gq',   ':exe <SID>BlameQuit()<CR>', '<silent>', ft)
@@ -7521,13 +7548,17 @@ function! fugitive#BrowseCommand(line1, count, range, bang, mods, arg, ...) abor
       endif
     endfor
 
-    throw "fugitive: no GBrowse handler installed for '".raw."'"
+    if !empty(remote_url)
+      return 'echoerr ' . string("fugitive: no GBrowse handler installed for '".remote_url."'")
+    else
+      return 'echoerr ' . string("fugitive: could not find remote named '".remote."'")
+    endif
   catch /^fugitive:/
     return 'echoerr ' . string(v:exception)
   endtry
 endfunction
 
-" Section: Go to file
+" Section: Maps
 
 let s:ref_header = '\%(Merge\|Rebase\|Upstream\|Pull\|Push\)'
 
@@ -7617,6 +7648,81 @@ function! s:MapMotion(lhs, rhs) abort
   return join(maps, '|')
 endfunction
 
+function! s:MapGitOps(is_ftplugin) abort
+  let ft = a:is_ftplugin
+  if &modifiable
+    return ''
+  endif
+  exe s:Map('n', 'c<Space>', ':Git commit<Space>', '', ft)
+  exe s:Map('n', 'c<CR>', ':Git commit<CR>', '', ft)
+  exe s:Map('n', 'cv<Space>', ':tab Git commit -v<Space>', '', ft)
+  exe s:Map('n', 'cv<CR>', ':tab Git commit -v<CR>', '', ft)
+  exe s:Map('n', 'ca', ':<C-U>Git commit --amend<CR>', '<silent>', ft)
+  exe s:Map('n', 'cc', ':<C-U>Git commit<CR>', '<silent>', ft)
+  exe s:Map('n', 'ce', ':<C-U>Git commit --amend --no-edit<CR>', '<silent>', ft)
+  exe s:Map('n', 'cw', ':<C-U>Git commit --amend --only<CR>', '<silent>', ft)
+  exe s:Map('n', 'cva', ':<C-U>tab Git commit -v --amend<CR>', '<silent>', ft)
+  exe s:Map('n', 'cvc', ':<C-U>tab Git commit -v<CR>', '<silent>', ft)
+  exe s:Map('n', 'cRa', ':<C-U>Git commit --reset-author --amend<CR>', '<silent>', ft)
+  exe s:Map('n', 'cRe', ':<C-U>Git commit --reset-author --amend --no-edit<CR>', '<silent>', ft)
+  exe s:Map('n', 'cRw', ':<C-U>Git commit --reset-author --amend --only<CR>', '<silent>', ft)
+  exe s:Map('n', 'cf', ':<C-U>Git commit --fixup=<C-R>=<SID>SquashArgument()<CR>', '', ft)
+  exe s:Map('n', 'cF', ':<C-U><Bar>Git -c sequence.editor=true rebase --interactive --autosquash<C-R>=<SID>RebaseArgument()<CR><Home>Git commit --fixup=<C-R>=<SID>SquashArgument()<CR>', '', ft)
+  exe s:Map('n', 'cs', ':<C-U>Git commit --no-edit --squash=<C-R>=<SID>SquashArgument()<CR>', '', ft)
+  exe s:Map('n', 'cS', ':<C-U><Bar>Git -c sequence.editor=true rebase --interactive --autosquash<C-R>=<SID>RebaseArgument()<CR><Home>Git commit --no-edit --squash=<C-R>=<SID>SquashArgument()<CR>', '', ft)
+  exe s:Map('n', 'cA', ':<C-U>Git commit --edit --squash=<C-R>=<SID>SquashArgument()<CR>', '', ft)
+  exe s:Map('n', 'c?', ':<C-U>help fugitive_c<CR>', '<silent>', ft)
+
+  exe s:Map('n', 'cr<Space>', ':Git revert<Space>', '', ft)
+  exe s:Map('n', 'cr<CR>', ':Git revert<CR>', '', ft)
+  exe s:Map('n', 'crc', ':<C-U>Git revert <C-R>=<SID>SquashArgument()<CR><CR>', '<silent>', ft)
+  exe s:Map('n', 'crn', ':<C-U>Git revert --no-commit <C-R>=<SID>SquashArgument()<CR><CR>', '<silent>', ft)
+  exe s:Map('n', 'cr?', ':<C-U>help fugitive_cr<CR>', '<silent>', ft)
+
+  exe s:Map('n', 'cm<Space>', ':Git merge<Space>', '', ft)
+  exe s:Map('n', 'cm<CR>', ':Git merge<CR>', '', ft)
+  exe s:Map('n', 'cmt', ':Git mergetool', '', ft)
+  exe s:Map('n', 'cm?', ':<C-U>help fugitive_cm<CR>', '<silent>', ft)
+
+  exe s:Map('n', 'cz<Space>', ':Git stash<Space>', '', ft)
+  exe s:Map('n', 'cz<CR>', ':Git stash<CR>', '', ft)
+  exe s:Map('n', 'cza', ':<C-U>Git stash apply --quiet --index stash@{<C-R>=v:count<CR>}<CR>', '', ft)
+  exe s:Map('n', 'czA', ':<C-U>Git stash apply --quiet stash@{<C-R>=v:count<CR>}<CR>', '', ft)
+  exe s:Map('n', 'czp', ':<C-U>Git stash pop --quiet --index stash@{<C-R>=v:count<CR>}<CR>', '', ft)
+  exe s:Map('n', 'czP', ':<C-U>Git stash pop --quiet stash@{<C-R>=v:count<CR>}<CR>', '', ft)
+  exe s:Map('n', 'czs', ':<C-U>Git stash push --staged<CR>', '', ft)
+  exe s:Map('n', 'czv', ':<C-U>exe "Gedit" fugitive#RevParse("stash@{" . v:count . "}")<CR>', '<silent>', ft)
+  exe s:Map('n', 'czw', ':<C-U>Git stash push --keep-index<C-R>=v:count > 1 ? " --all" : v:count ? " --include-untracked" : ""<CR><CR>', '', ft)
+  exe s:Map('n', 'czz', ':<C-U>Git stash push <C-R>=v:count > 1 ? " --all" : v:count ? " --include-untracked" : ""<CR><CR>', '', ft)
+  exe s:Map('n', 'cz?', ':<C-U>help fugitive_cz<CR>', '<silent>', ft)
+
+  exe s:Map('n', 'co<Space>', ':Git checkout<Space>', '', ft)
+  exe s:Map('n', 'co<CR>', ':Git checkout<CR>', '', ft)
+  exe s:Map('n', 'coo', ':<C-U>Git checkout <C-R>=substitute(<SID>SquashArgument(),"^$",get(<SID>TempState(),"filetype","") ==# "git" ? expand("<cfile>") : "","")<CR> --<CR>', '', ft)
+  exe s:Map('n', 'co?', ':<C-U>help fugitive_co<CR>', '<silent>', ft)
+
+  exe s:Map('n', 'cb<Space>', ':Git branch<Space>', '', ft)
+  exe s:Map('n', 'cb<CR>', ':Git branch<CR>', '', ft)
+  exe s:Map('n', 'cb?', ':<C-U>help fugitive_cb<CR>', '<silent>', ft)
+
+  exe s:Map('n', 'r<Space>', ':Git rebase<Space>', '', ft)
+  exe s:Map('n', 'r<CR>', ':Git rebase<CR>', '', ft)
+  exe s:Map('n', 'ri', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><CR>', '<silent>', ft)
+  exe s:Map('n', 'rf', ':<C-U>Git -c sequence.editor=true rebase --interactive --autosquash<C-R>=<SID>RebaseArgument()<CR><CR>', '<silent>', ft)
+  exe s:Map('n', 'ru', ':<C-U>Git rebase --interactive @{upstream}<CR>', '<silent>', ft)
+  exe s:Map('n', 'rp', ':<C-U>Git rebase --interactive @{push}<CR>', '<silent>', ft)
+  exe s:Map('n', 'rw', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><Bar>s/^pick/reword/e<CR>', '<silent>', ft)
+  exe s:Map('n', 'rm', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><Bar>s/^pick/edit/e<CR>', '<silent>', ft)
+  exe s:Map('n', 'rd', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><Bar>s/^pick/drop/e<CR>', '<silent>', ft)
+  exe s:Map('n', 'rk', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><Bar>s/^pick/drop/e<CR>', '<silent>', ft)
+  exe s:Map('n', 'rx', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><Bar>s/^pick/drop/e<CR>', '<silent>', ft)
+  exe s:Map('n', 'rr', ':<C-U>Git rebase --continue<CR>', '<silent>', ft)
+  exe s:Map('n', 'rs', ':<C-U>Git rebase --skip<CR>', '<silent>', ft)
+  exe s:Map('n', 're', ':<C-U>Git rebase --edit-todo<CR>', '<silent>', ft)
+  exe s:Map('n', 'ra', ':<C-U>Git rebase --abort<CR>', '<silent>', ft)
+  exe s:Map('n', 'r?', ':<C-U>help fugitive_r<CR>', '<silent>', ft)
+endfunction
+
 function! fugitive#MapJumps(...) abort
   if !&modifiable
     if get(b:, 'fugitive_type', '') ==# 'blob'
@@ -7681,75 +7787,6 @@ function! fugitive#MapJumps(...) abort
     call s:Map('n', 'gi',    ":<C-U>exe 'Gsplit' (v:count ? '.gitignore' : '.git/info/exclude')<CR>", '<silent>')
     call s:Map('x', 'gi',    ":<C-U>exe 'Gsplit' (v:count ? '.gitignore' : '.git/info/exclude')<CR>", '<silent>')
 
-    call s:Map('n', 'c<Space>', ':Git commit<Space>')
-    call s:Map('n', 'c<CR>', ':Git commit<CR>')
-    call s:Map('n', 'cv<Space>', ':tab Git commit -v<Space>')
-    call s:Map('n', 'cv<CR>', ':tab Git commit -v<CR>')
-    call s:Map('n', 'ca', ':<C-U>Git commit --amend<CR>', '<silent>')
-    call s:Map('n', 'cc', ':<C-U>Git commit<CR>', '<silent>')
-    call s:Map('n', 'ce', ':<C-U>Git commit --amend --no-edit<CR>', '<silent>')
-    call s:Map('n', 'cw', ':<C-U>Git commit --amend --only<CR>', '<silent>')
-    call s:Map('n', 'cva', ':<C-U>tab Git commit -v --amend<CR>', '<silent>')
-    call s:Map('n', 'cvc', ':<C-U>tab Git commit -v<CR>', '<silent>')
-    call s:Map('n', 'cRa', ':<C-U>Git commit --reset-author --amend<CR>', '<silent>')
-    call s:Map('n', 'cRe', ':<C-U>Git commit --reset-author --amend --no-edit<CR>', '<silent>')
-    call s:Map('n', 'cRw', ':<C-U>Git commit --reset-author --amend --only<CR>', '<silent>')
-    call s:Map('n', 'cf', ':<C-U>Git commit --fixup=<C-R>=<SID>SquashArgument()<CR>')
-    call s:Map('n', 'cF', ':<C-U><Bar>Git -c sequence.editor=true rebase --interactive --autosquash<C-R>=<SID>RebaseArgument()<CR><Home>Git commit --fixup=<C-R>=<SID>SquashArgument()<CR>')
-    call s:Map('n', 'cs', ':<C-U>Git commit --no-edit --squash=<C-R>=<SID>SquashArgument()<CR>')
-    call s:Map('n', 'cS', ':<C-U><Bar>Git -c sequence.editor=true rebase --interactive --autosquash<C-R>=<SID>RebaseArgument()<CR><Home>Git commit --no-edit --squash=<C-R>=<SID>SquashArgument()<CR>')
-    call s:Map('n', 'cA', ':<C-U>Git commit --edit --squash=<C-R>=<SID>SquashArgument()<CR>')
-    call s:Map('n', 'c?', ':<C-U>help fugitive_c<CR>', '<silent>')
-
-    call s:Map('n', 'cr<Space>', ':Git revert<Space>')
-    call s:Map('n', 'cr<CR>', ':Git revert<CR>')
-    call s:Map('n', 'crc', ':<C-U>Git revert <C-R>=<SID>SquashArgument()<CR><CR>', '<silent>')
-    call s:Map('n', 'crn', ':<C-U>Git revert --no-commit <C-R>=<SID>SquashArgument()<CR><CR>', '<silent>')
-    call s:Map('n', 'cr?', ':<C-U>help fugitive_cr<CR>', '<silent>')
-
-    call s:Map('n', 'cm<Space>', ':Git merge<Space>')
-    call s:Map('n', 'cm<CR>', ':Git merge<CR>')
-    call s:Map('n', 'cmt', ':Git mergetool')
-    call s:Map('n', 'cm?', ':<C-U>help fugitive_cm<CR>', '<silent>')
-
-    call s:Map('n', 'cz<Space>', ':Git stash<Space>')
-    call s:Map('n', 'cz<CR>', ':Git stash<CR>')
-    call s:Map('n', 'cza', ':<C-U>Git stash apply --quiet --index stash@{<C-R>=v:count<CR>}<CR>')
-    call s:Map('n', 'czA', ':<C-U>Git stash apply --quiet stash@{<C-R>=v:count<CR>}<CR>')
-    call s:Map('n', 'czp', ':<C-U>Git stash pop --quiet --index stash@{<C-R>=v:count<CR>}<CR>')
-    call s:Map('n', 'czP', ':<C-U>Git stash pop --quiet stash@{<C-R>=v:count<CR>}<CR>')
-    call s:Map('n', 'czs', ':<C-U>Git stash push --staged<CR>')
-    call s:Map('n', 'czv', ':<C-U>exe "Gedit" fugitive#RevParse("stash@{" . v:count . "}")<CR>', '<silent>')
-    call s:Map('n', 'czw', ':<C-U>Git stash push --keep-index<C-R>=v:count > 1 ? " --all" : v:count ? " --include-untracked" : ""<CR><CR>')
-    call s:Map('n', 'czz', ':<C-U>Git stash push <C-R>=v:count > 1 ? " --all" : v:count ? " --include-untracked" : ""<CR><CR>')
-    call s:Map('n', 'cz?', ':<C-U>help fugitive_cz<CR>', '<silent>')
-
-    call s:Map('n', 'co<Space>', ':Git checkout<Space>')
-    call s:Map('n', 'co<CR>', ':Git checkout<CR>')
-    call s:Map('n', 'coo', ':<C-U>Git checkout <C-R>=substitute(<SID>SquashArgument(),"^$",get(<SID>TempState(),"filetype","") ==# "git" ? expand("<cfile>") : "","")<CR> --<CR>')
-    call s:Map('n', 'co?', ':<C-U>help fugitive_co<CR>', '<silent>')
-
-    call s:Map('n', 'cb<Space>', ':Git branch<Space>')
-    call s:Map('n', 'cb<CR>', ':Git branch<CR>')
-    call s:Map('n', 'cb?', ':<C-U>help fugitive_cb<CR>', '<silent>')
-
-    call s:Map('n', 'r<Space>', ':Git rebase<Space>')
-    call s:Map('n', 'r<CR>', ':Git rebase<CR>')
-    call s:Map('n', 'ri', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><CR>', '<silent>')
-    call s:Map('n', 'rf', ':<C-U>Git -c sequence.editor=true rebase --interactive --autosquash<C-R>=<SID>RebaseArgument()<CR><CR>', '<silent>')
-    call s:Map('n', 'ru', ':<C-U>Git rebase --interactive @{upstream}<CR>', '<silent>')
-    call s:Map('n', 'rp', ':<C-U>Git rebase --interactive @{push}<CR>', '<silent>')
-    call s:Map('n', 'rw', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><Bar>s/^pick/reword/e<CR>', '<silent>')
-    call s:Map('n', 'rm', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><Bar>s/^pick/edit/e<CR>', '<silent>')
-    call s:Map('n', 'rd', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><Bar>s/^pick/drop/e<CR>', '<silent>')
-    call s:Map('n', 'rk', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><Bar>s/^pick/drop/e<CR>', '<silent>')
-    call s:Map('n', 'rx', ':<C-U>Git rebase --interactive<C-R>=<SID>RebaseArgument()<CR><Bar>s/^pick/drop/e<CR>', '<silent>')
-    call s:Map('n', 'rr', ':<C-U>Git rebase --continue<CR>', '<silent>')
-    call s:Map('n', 'rs', ':<C-U>Git rebase --skip<CR>', '<silent>')
-    call s:Map('n', 're', ':<C-U>Git rebase --edit-todo<CR>', '<silent>')
-    call s:Map('n', 'ra', ':<C-U>Git rebase --abort<CR>', '<silent>')
-    call s:Map('n', 'r?', ':<C-U>help fugitive_r<CR>', '<silent>')
-
     call s:Map('n', '.',     ":<C-U> <C-R>=<SID>fnameescape(fugitive#Real(@%))<CR><Home>")
     call s:Map('x', '.',     ":<C-U> <C-R>=<SID>fnameescape(fugitive#Real(@%))<CR><Home>")
     call s:Map('n', 'g?',    ":<C-U>help fugitive-map<CR>", '<silent>')
@@ -7762,6 +7799,7 @@ function! fugitive#MapJumps(...) abort
   if new_browsex !=# old_browsex
     exe 'nnoremap <silent> <buffer> <Plug>NetrwBrowseX' new_browsex
   endif
+  call s:MapGitOps(0)
 endfunction
 
 function! fugitive#GX() abort
@@ -8115,6 +8153,9 @@ function! fugitive#Foldtext() abort
     endif
   elseif line_foldstart =~# '^@@\+ .* @@'
     return '+-' . v:folddashes . ' ' . line_foldstart
+  elseif &filetype ==# 'fugitive' && line_foldstart =~# '^[A-Z][a-z].* (\d\+)$'
+    let c = +matchstr(line_foldstart, '(\zs\d\+\ze)$')
+    return '+-' . v:folddashes . printf('%3d item', c) . (c == 1 ? ':  ' : 's: ') . matchstr(line_foldstart, '.*\ze (\d\+)$')
   elseif &filetype ==# 'gitcommit' && line_foldstart =~# '^# .*:$'
     let lines = getline(v:foldstart, v:foldend)
     call filter(lines, 'v:val =~# "^#\t"')

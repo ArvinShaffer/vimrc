@@ -6,7 +6,7 @@ Over the last 10 years, I have used and tweaked Vim. This configuration is the u
 
 There are two versions:
 
-* **The Basic**: If you want something small just copy [basic.vim](https://github.com/amix/vimrc/blob/master/vimrcs/basic.vim) into your ~/.vimrc and you will have a good basic setup
+* **The Basic**: If you want something small just copy [basic.vim](https://github.com/ArvinShaffer/vimrc/blob/master/vimrcs/basic.vim) into your ~/.vimrc and you will have a good basic setup
 * **The Awesome**: Includes a ton of useful plugins, color schemes, and configurations
 
 I would, of course, recommend using the awesome version.
@@ -18,7 +18,7 @@ The awesome version includes a lot of great plugins, configurations and color sc
 
 	git clone --depth=1 https://github.com/ArvinShaffer/vimrc.git ~/.vim_runtime
 	sh ~/.vim_runtime/install_awesome_vimrc.sh
-	
+
 ### Install for multiple users
 To install for multiple users, the repository needs to be cloned to a location accessible for all the intended users.
 
@@ -26,7 +26,7 @@ To install for multiple users, the repository needs to be cloned to a location a
 	sh /opt/vim_runtime/install_awesome_parameterized.sh /opt/vim_runtime user0 user1 user2
 	# to install for all users with home directories, note that root will not be included
 	sh /opt/vim_runtime/install_awesome_parameterized.sh /opt/vim_runtime --all
-	
+
 Naturally, `/opt/vim_runtime` can be any directory, as long as all the users specified have read access.
 
 ## Fonts
@@ -40,11 +40,11 @@ Some other fonts that Awesome will try to use:
 
 ## How to install the Basic version?
 
-The basic version is just one file and no plugins. Just copy [basic.vim](https://github.com/amix/vimrc/blob/master/vimrcs/basic.vim) and paste it into your vimrc.
+The basic version is just one file and no plugins. Just copy [basic.vim](https://github.com/ArvinShaffer/vimrc/blob/master/vimrcs/basic.vim) and paste it into your vimrc.
 
 The basic version is useful to install on remote servers where you don't need many plugins, and you don't do many edits.
 
-	git clone --depth=1 https://github.com/amix/vimrc.git ~/.vim_runtime
+	git clone --depth=1 https://github.com/ArvinShaffer/vimrc.git ~/.vim_runtime
 	sh ~/.vim_runtime/install_basic_vimrc.sh
 
 
@@ -163,7 +163,7 @@ The [leader](http://learnvimscriptthehardway.stevelosh.com/chapters/06.html#lead
 Fast saving of a buffer (`<leader>w`):
 
 	nmap <leader>w :w!<cr>
-	
+
 Map `<Space>` to `/` (search) and `<Ctrl>+<Space>` to `?` (backwards search):
 	
 	map <space> /
@@ -187,7 +187,7 @@ Closing of the current buffer(s) (`<leader>bd` and (`<leader>ba`)):
 	
 	" Close all buffers
 	map <leader>ba :1,1000 bd!<cr>
-	
+
 Useful mappings for managing tabs:
 	
 	map <leader>tn :tabnew<cr>
@@ -198,11 +198,11 @@ Useful mappings for managing tabs:
 	" Opens a new tab with the current buffer's path
 	" Super useful when editing files in the same directory
 	map <leader>te :tabedit <C-r>=escape(expand("%:p:h"), " ")<cr>/
-	
+
 Switch [CWD](http://vim.wikia.com/wiki/Set_working_directory_to_the_current_file) to the directory of the open buffer:
 	
 	map <leader>cd :cd %:p:h<cr>:pwd<cr>
-	
+
 Open `ack.vim` for fast search:
 	
 	map <leader>g :Ack 
@@ -269,7 +269,7 @@ Bash like keys for the command line:
     cnoremap <C-A>		<Home>
     cnoremap <C-E>		<End>
     cnoremap <C-K>		<C-U>
-
+    
     cnoremap <C-P> <Up>
     cnoremap <C-N> <Down>
 
@@ -288,10 +288,10 @@ Open [ctrlp.vim](https://github.com/kien/ctrlp.vim) plugin to quickly find a fil
 
     " Quickly find and open a file in the CWD
     let g:ctrlp_map = '<C-f>'
-
+    
     " Quickly find and open a recently opened file
     map <leader>f :MRU<CR>
-
+    
     " Quickly find and open a buffer
     map <leader>b :CtrlPBuffer<cr>
 
